@@ -1,16 +1,21 @@
 #include "util.h"
 
-uint32_t round_up(uint32_t x, uint32_t n) {
+
+
+
+uint32_t round_up(uint32_t x, uint32_t n)
+{
 	return (uint32_t)((x + n - 1) / n) * n;
 }
 
-int read_entire_file(const char *file_path, void **data, uint32_t *size, uint32_t roundup) {
-	FILE *fp;
-	struct stat st;
-	void *ptr;
-	uint32_t length;
+int read_entire_file(const char *file_path, void **data, uint32_t *size, uint32_t roundup)
+{
+	FILE *fp = NULL;
+	struct _stat st = {0};
+	void *ptr = NULL;
+	uint32_t length = 0;
 
-	if (stat(file_path, &st) != -1)
+	if (_stat(file_path, &st) != -1)
 		length = st.st_size;
 	else {
 		*data = NULL;
@@ -32,7 +37,8 @@ int read_entire_file(const char *file_path, void **data, uint32_t *size, uint32_
 	return 0;
 }
 
-int read_file(const char *file_path, void *data, uint32_t size) {
+int read_file(const char *file_path, void *data, uint32_t size)
+{
 	FILE *fp;
 	fp = fopen(file_path, "rb");
 	if (!fp)
@@ -42,24 +48,28 @@ int read_file(const char *file_path, void *data, uint32_t size) {
 	return 0;
 }
 
-int write_file(const char *file_path, const void *data, uint32_t size) {
+int write_file(const char *file_path, const void *data, uint32_t size)
+{
 	FILE *fp;
 	fp = fopen(file_path, "wb");
 	if (!fp)
 		return -EFAULT;
+
 	fwrite(data, 1, size, fp);
 	fclose(fp);
 	return 0;
 }
 
-void print_hex(const uint8_t *data, uint32_t size) {
+void print_hex(const uint8_t *data, uint32_t size)
+{
 	uint32_t i;
 	for (i = 0; i < size; ++i)
 		printf("%02X ", data[i]);
 	printf("\n");
 }
 
-uint32_t swap32(uint32_t x) {
+uint32_t swap32(uint32_t x)
+{
     x = ((x << 8) & 0xFF00FF00) | ((x >> 8) & 0xFF00FF);
     return (x << 16) | (x >> 16);
 }
@@ -179,14 +189,14 @@ void elf_read_shdr(int arch64, uint8_t *shdr, struct elf_shdr *s)
 	if (arch64) {
 		s->sh_name =	  be32(shdr + 0*4);
 		s->sh_type =	  be32(shdr + 1*4);
-		s->sh_flags =	  be64(shdr + 2*4);
+		s->sh_flags =	 (uint32_t)be64(shdr + 2*4);
 		s->sh_addr =	  be64(shdr + 2*4 + 1*8);
 		s->sh_offset =	  be64(shdr + 2*4 + 2*8);
-		s->sh_size =	  be64(shdr + 2*4 + 3*8);
+		s->sh_size =	  (uint32_t)be64(shdr + 2*4 + 3*8);
 		s->sh_link =	  be32(shdr + 2*4 + 4*8);
 		s->sh_info =	  be32(shdr + 3*4 + 4*8);
-		s->sh_addralign = be64(shdr + 4*4 + 4*8);
-		s->sh_entsize =   be64(shdr + 4*4 + 5*8);
+		s->sh_addralign = (uint32_t)be64(shdr + 4*4 + 4*8);
+		s->sh_entsize =   (uint32_t)be64(shdr + 4*4 + 5*8);
 	} else {
 		s->sh_name =	  be32(shdr + 0*4);
 		s->sh_type =	  be32(shdr + 1*4);
@@ -257,11 +267,11 @@ uint32_t find_va_sh(unsigned int idx, uint32_t ra, uint8_t *in)
 
 uint32_t va_to_ra(uint8_t *in, uint32_t va)
 {
-
+	unsigned int i, result = 0;
 	struct elf_hdr ehdr;
 	elf_read_hdr(in, &ehdr);
 
-	unsigned int i, result;
+	
 	if (ehdr.e_shnum > 0)
 	{
 		for (i = 0; i < ehdr.e_shnum; i++)
@@ -278,11 +288,11 @@ uint32_t va_to_ra(uint8_t *in, uint32_t va)
 
 uint32_t ra_to_va(uint8_t *in, uint32_t ra)
 {
-
+	unsigned int i, result = 0;
 	struct elf_hdr ehdr;
 	elf_read_hdr(in, &ehdr);
 
-	unsigned int i, result;
+	
 	if (ehdr.e_shnum > 0)
 	{
 		for (i = 0; i < ehdr.e_shnum; i++)

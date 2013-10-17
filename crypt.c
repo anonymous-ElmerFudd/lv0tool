@@ -4,6 +4,8 @@
 #include "tables.h"
 #include "util.h"
 
+#define CRYPTO_PPU
+
 typedef struct {
 	uint8_t erk[SFC_KEY_SIZE];
 	uint8_t riv[SFC_BLOCK_SIZE];
@@ -59,14 +61,21 @@ const uint16_t phase2_ctrl2[4] = {
 	RCTRL_X(10,  4), RCTRL_X(14,  5), RCTRL_X( 2,  6), RCTRL_X( 6,  7)
 };
 
-int calculate_key(const uint8_t *box, const uint8_t *iv, uint8_t key[SFC_BLOCK_SIZE]) {
+int calculate_key(const uint8_t *box, const uint8_t *iv, uint8_t key[SFC_BLOCK_SIZE])
+{
 	uint8_t ctx[SFC_BLOCK_SIZE];
+	uint16_t ctrl1 = 0;
+	uint16_t ctrl2 = 0;
+	uint32_t x1 = 0;
+	uint32_t x2 = 0;
 	uint32_t s[16];
 	uint32_t t[8];
 	uint32_t x[16];
 	uint32_t p[4];
 	uint32_t n[4];
 	uint32_t state_matrix[16];
+	/* initialize the context with IV */
+	const uint32_t *ku = (const uint32_t *)box;
 
 	int round;
 	int i, j;
@@ -74,8 +83,8 @@ int calculate_key(const uint8_t *box, const uint8_t *iv, uint8_t key[SFC_BLOCK_S
 	memset(key, 0, SFC_BLOCK_SIZE);
 	memset(ctx, 0, SFC_BLOCK_SIZE);
 
-	/* initialize the context with IV */
-	const uint32_t *ku = (const uint32_t *)box;
+//	/* initialize the context with IV */
+//	const uint32_t *ku = (const uint32_t *)box;
 	for (i = 0; i < 16; ++i) {
 		ctx[i] = T1[i * 256 + iv[i]] ^ box[i];
 	}
@@ -111,11 +120,11 @@ int calculate_key(const uint8_t *box, const uint8_t *iv, uint8_t key[SFC_BLOCK_S
 			assert((phase2_ctrl1[i] & RCTRL_X_BIT) == RCTRL_X_BIT);
 			assert((phase2_ctrl2[i] & RCTRL_X_BIT) == RCTRL_X_BIT);
 
-			uint16_t ctrl1 = phase2_ctrl1[i];
-			uint16_t ctrl2 = phase2_ctrl2[i];
+			ctrl1 = phase2_ctrl1[i];
+			ctrl2 = phase2_ctrl2[i];
 
-			uint32_t x1 = s[RCTRL_V1(ctrl1)] ^ x[RCTRL_V2(ctrl1)];
-			uint32_t x2 = s[RCTRL_V1(ctrl2)] ^ t[RCTRL_V2(ctrl2)];
+			x1 = s[RCTRL_V1(ctrl1)] ^ x[RCTRL_V2(ctrl1)];
+			x2 = s[RCTRL_V1(ctrl2)] ^ t[RCTRL_V2(ctrl2)];
 
 			p[i] = x1 ^ x2;
 		}
@@ -198,10 +207,10 @@ sfc_context_t * sfc_create_context(const uint8_t erk[SFC_KEY_SIZE], const uint8_
 }
 
 int sfc_process_data(sfc_context_t *ctx, const uint8_t *in, uint8_t *out, uint32_t size) {
-	sfc_context_prv_t *real_ctx;
-	uint8_t final_key[SFC_BLOCK_SIZE];
-	uint32_t num_blocks;
-	uint32_t i, j;
+	sfc_context_prv_t *real_ctx = NULL;
+	uint8_t final_key[SFC_BLOCK_SIZE] = {0};
+	uint32_t num_blocks = 0;
+	uint32_t i, j = 0;
 
 	if (ctx == NULL || in == NULL || out == NULL)
 		return SFC_ERROR_INVALID_ARG;
@@ -215,7 +224,7 @@ int sfc_process_data(sfc_context_t *ctx, const uint8_t *in, uint8_t *out, uint32
 		for (j = 0; j < SFC_BLOCK_SIZE; ++j)
 			out[j] = in[j] ^ final_key[j];
 
-		for (j = SFC_BLOCK_SIZE - 1; j >= 0; --j) {
+		for (j = (SFC_BLOCK_SIZE - 1); j > 0; --j) {
 			real_ctx->riv[j]++;
 			if (real_ctx->riv[j])
 				break;
