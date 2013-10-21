@@ -80,7 +80,7 @@ void extract_ldrs(uint8_t *in, uint32_t size, char* szFilePath)
 				break;
 
 			ldr_size = (uint32_t)(be64(in+i+0x10) + be64(in+i+0x18));
-			printf("extracting ldr:%s at %x size: %x bytes\n", g_pszLdrNames[ldr], i, ldr_size);
+			printf("exported ldr:%s at 0x%x size 0x%x bytes\n", g_pszLdrNames[ldr], i, ldr_size);
 			
 			sprintf_s(szOutFileName, MAX_PATH, "%s\\%s", szFilePath, g_pszLdrNames[ldr]);
 			write_file(szOutFileName, in+i, ldr_size);
@@ -95,47 +95,58 @@ void extract_ldrs(uint8_t *in, uint32_t size, char* szFilePath)
 
 ///////////////////////////////////////////////////////////////////////////////////////
 //
-void import_ldrs(uint8_t *in, uint32_t size, char* szInPath)
+void import_ldrs(uint8_t *in, uint32_t lv0_size, char* szInPath)
 {
-	uint32_t ldr_size, import_size, i = 0;
+	uint32_t org_ldr_size, import_size, i = 0;
+	uint64_t org_auth_id = 0;
+	uint64_t new_auth_id = 0;
 	uint8_t *ldr = NULL;
-	char szInFileName[MAX_PATH] = {0};	
+	char szInFileName[MAX_PATH] = {0};		
 	int found = 0;
 
-	for(i=0;i<size;i+=4)
+	
+
+	// iterate the binary, and process importing the 
+	// actual loaders from disk	
+	for(i=0; i<lv0_size; i+=4)
 	{
 		if(be32(in+i) == SELF_HEADER_SIG)
-		{
-			if(found >= NUM_EMBEDDED_LDRS)
-				break;
-
+		{			
 			//sprintf_s(name, MAX_PATH, "ldr_%i", j);
 			sprintf_s(szInFileName, MAX_PATH, "%s\\%s", szInPath, g_pszLdrNames[found]);
 
-			ldr_size = (uint32_t)(be64(in+i+0x10) + be64(in+i+0x18));
+			// calculate the current size of the ldr in this slot, 
+			// and the current auth_id
+			org_ldr_size = (uint32_t)(be64(in+i+0x10) + be64(in+i+0x18));
+			org_auth_id = (uint64_t)be64(in+i+0x70);			
+
+			// read in the new ldr from the file on disk
 			if (read_entire_file(szInFileName, (void **)&ldr, &import_size, SFC_BLOCK_SIZE) < 0) {
 				printf("\nERROR: read_file failed:%s", szInFileName);
 				exit(1);
-			}
-			if( (ldr_size == import_size) && (be64(in+i+0x70) == be64(ldr+0x70)) )
-			{
-				printf("importing ldr:%s at 0x%x size: 0x%x bytes\n", g_pszLdrNames[found], i, ldr_size);
-				memcpy(in+i, ldr, ldr_size);
-			} 
-			else if( (import_size < ldr_size) && (be64(in+i+0x70) == be64(ldr+0x70)) )
-			{
-				printf("importing smaller ldr:%s at 0x%x, size:0x%x (expected:0x%x) bytes\n", g_pszLdrNames[found], i, import_size, ldr_size);
-				// fill the ldr location with 0s, since our "new size" is smaller
-				// than the original size...then copy over new image
-				memset(in+i, 0, ldr_size);
-				memcpy(in+i, ldr, import_size);
-			}
-			else {
-				printf("import failed: file does not match: %s\n\tsize:0x%x expected:0x%x\n\t auth id: 0x%llx expected: 0x%llx\n", g_pszLdrNames[found], import_size, ldr_size, be64(ldr+0x70), be64(in+i+0x70));
+			}			
+			// if the AUTHID of the new ldr, does NOT match
+			// the AUTHID of the original ldr, then fail out
+			new_auth_id = (uint64_t)be64(ldr+0x70);
+			if ( new_auth_id != org_auth_id ) {				
+				printf("ERROR! AUTHIDs do NOT match!\n\t--> expected:0x%16llx, found:0x%16llx, file:%s\n", org_auth_id, new_auth_id, g_pszLdrNames[found]);
 				exit(1);
 			}
+			// check our imported ldr size, versus the original size of the
+			// ldr that was in LV0.  If import_size is larger than the max size,
+			// we must fail out
+			if ( import_size > org_ldr_size ) {
+				printf("import failed: file:%s is TOO LARGE! MAX size for import: 0x%x, size attempted: 0x%x\n", g_pszLdrNames[found], org_ldr_size, import_size);
+				exit(1);
+			}
+			else {								
+				printf("imported ldr:%s at 0x%x, new size 0x%x (prev. size 0x%x)\n", g_pszLdrNames[found], i, import_size, org_ldr_size);				
+				memset(in+i, 0x00, org_ldr_size);	// zero out the area before the copy (original size)
+				memcpy(in+i, ldr, import_size);		// copy in the new ldr (new size)
+			}						
 			found++;
-
+			if(found >= NUM_EMBEDDED_LDRS)
+				break;
 		} // if (SCE...)
 	} // for (i = 0...)
 }
@@ -152,9 +163,9 @@ uint8_t * get_lv1ldr(uint8_t * in, uint32_t size)
 
 uint32_t get_lv1ldr_size(uint8_t * in, uint32_t size, uint32_t addr)
 {
-	uint32_t va = ra_to_va(in, addr);
-	//printf("va %x\n", va);
+	uint32_t va = ra_to_va(in, addr);	
 	uint32_t ptr_lv1ldr = reverse_binsearch64(in, size, va);
+	//printf("va %x\n", va);	
 	//printf("lv1ldr_ptr %x->\n", ptr_lv1ldr, ra_to_va(in, ptr_lv1ldr));
 	return (uint32_t) be64(in + ptr_lv1ldr + 8);
 }
@@ -177,8 +188,8 @@ void usage (char* pszInParam)
 	printf("-filepath:\t** optional **\n\tdir path to LV0 file\n");
 	printf("\t(default: .\\)\n\n");
 	printf("-lv1crypt:\t** optional **\n");
-	printf("\tYES:	do crypt of lv1ldr before import/export ** default **\n");
-	printf("\tNO:	do NOT crypt lv1ldr before import/export\n\n");			
+	printf("\tYES:	do crypt of lv1ldr before import ** default **\n");
+	printf("\tNO:	do NOT crypt lv1ldr before import\n\n");			
 	printf("-cleanup:\t** optional **\n");
 	printf("\tYES:	delete loaders after import\n");
 	printf("\tNO:	do NOT delete loaders after import ** default **\n");
@@ -237,7 +248,7 @@ int __cdecl main(int argc, char *argv[])
 	uint8_t *lv1ldr = NULL;
 	uint32_t lv1ldr_size = 0;
 	uint32_t end_of_data = 0;
-	uint32_t size = 0;
+	uint32_t lv0_size = 0;
 	uint32_t args_mask = 0x00;
 	int i = 0;
 	int index = 0;
@@ -367,7 +378,7 @@ int __cdecl main(int argc, char *argv[])
 		goto exit;	
 
 	// read file into buffer
-	if ( read_entire_file(szFullFileName, (void **)&in, &size, SFC_BLOCK_SIZE) < 0 ) {
+	if ( read_entire_file(szFullFileName, (void **)&in, &lv0_size, SFC_BLOCK_SIZE) < 0 ) {
 		printf("\nERROR: could not read_file:%s\n", szFileName);
 		goto exit;
 	}
@@ -385,11 +396,12 @@ int __cdecl main(int argc, char *argv[])
 
 	T1 = set_data(in, (uint32_t)be64(in + end_of_data - 0x18));
 	B = (uint32_t *) set_data(in, (uint32_t)be64(in + end_of_data - 0x10));
-	T2 = set_data(in, (uint32_t)be64(in + end_of_data - 0x8));
+	T2 = set_data(in, (uint32_t)be64(in + end_of_data - 0x8));	
 
-	//find lv1ldr
-	lv1ldr = get_lv1ldr(in, size);
-	lv1ldr_size = get_lv1ldr_size(in, size, (uint32_t)(lv1ldr - in));
+	//find lv1ldr, and get its' current size
+	lv1ldr = get_lv1ldr(in, lv0_size);
+	lv1ldr_size = get_lv1ldr_size(in, lv0_size, (uint32_t)(lv1ldr - in));
+	//printf("lv1ldr_size:0x%x\n", lv1ldr_size);	
 
 	/*print_hex(erk, 0x10);
 	print_hex(riv, 0x10);
@@ -399,31 +411,47 @@ int __cdecl main(int argc, char *argv[])
 	print_hex(lv1ldr, 0x10);
 	printf("lv1ldr_size %x\n", lv1ldr_size);*/
 
-	//decrypt lv1ldr, unless option to disable is yes
-	if (bDoLV1Crypt == TRUE)
-		crypt_lv1ldr(lv1ldr, lv1ldr_size, erk, riv);
 
-	//check decrypted lv1ldr
-	if(be32(lv1ldr) != SELF_HEADER_SIG) {
-		printf("(de)crypt_lv1ldr failed\n");
-		exit(1);
+	// first check the current lv1ldr, if it currently
+	// exists in 'encrypted' state, decrypt it, so we can
+	// read the headers during the 'import' phase
+	if(be32(lv1ldr) != SELF_HEADER_SIG)
+	{
+		// do the decrypt of the lv1ldr
+		crypt_lv1ldr(lv1ldr, lv1ldr_size, erk, riv);
+		if(be32(lv1ldr) != SELF_HEADER_SIG) {
+			printf("failed to verify header of lv1ldr\n");
+			exit(1);
+		}
+		else
+			printf("CRYPTED LV1LDR located/decrypted successfully\n");
 	}
+	else
+		printf("NON-CRYPTED LV1LDR located successfully\n");
+
 
 	// if we are doing EXPORT, 
 	// extract the loaders
-	if (bDoExtract == TRUE) {			
-		extract_ldrs(in, size, szFilePath);
+	if (bDoExtract == TRUE)
+	{			
+		// now extract the loaders
+		extract_ldrs(in, lv0_size, szFilePath);
 	}	
 	else 
-	{
-		// import loaders, and
-		// encrypt LV1 if specified (default)
-		import_ldrs(in, size, szFilePath);		
-		if (bDoLV1Crypt == TRUE)
+	{	
+		// import in the new ldrs		
+		import_ldrs(in, lv0_size, szFilePath);			
+
+		// if we selected "lv1crypt", then encrypt the lv1ldr
+		if (bDoLV1Crypt == TRUE) {
 			crypt_lv1ldr(lv1ldr, lv1ldr_size, erk, riv);
+			printf("\t*** lv1ldr set to ENCRYPTED ***\n");
+		}
+		else
+			printf("\t*** lv1ldr set to NON-ENCRYPTED ***\n");
 
 		// write out the final file
-		write_file(szFullFileName, in, size);
+		write_file(szFullFileName, in, lv0_size);
 
 		// if cleanup specified, delete the 
 		// exracted loaders
@@ -433,13 +461,15 @@ int __cdecl main(int argc, char *argv[])
 				sprintf_s(szFullFileName, MAX_PATH, "%s\\%s", szFilePath, g_pszLdrNames[i]);
 				DeleteFileA(szFullFileName);	
 			}
-		}
+		}		
 	} // end import_ldrs
-	
+
+	printf("\n\n!!! LV0TOOL SUCCESS !!!\n\n");
 
 exit:
 	// free the alloc'd memory
-	free(in);
+	if (in != NULL)
+		free(in);
 
 	return 0;
 }
