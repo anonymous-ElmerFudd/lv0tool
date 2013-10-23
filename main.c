@@ -141,7 +141,7 @@ void import_ldrs(uint8_t *in, uint32_t lv0_size, char* szInPath)
 			}
 			else {								
 				printf("imported ldr:%s at 0x%x, new size 0x%x (prev. size 0x%x)\n", g_pszLdrNames[found], i, import_size, org_ldr_size);				
-				memset(in+i, 0x00, org_ldr_size);	// zero out the area before the copy (original size)
+				//memset(in+i, 0x00, org_ldr_size);	// zero out the area before the copy (original size)
 				memcpy(in+i, ldr, import_size);		// copy in the new ldr (new size)
 			}						
 			found++;
