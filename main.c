@@ -95,7 +95,7 @@ void extract_ldrs(uint8_t *in, uint32_t size, char* szFilePath)
 
 ///////////////////////////////////////////////////////////////////////////////////////
 //
-void import_ldrs(uint8_t *in, uint32_t lv0_size, char* szInPath)
+void import_ldrs(uint8_t *in, uint8_t *out, uint32_t lv0_size, char* szInPath)
 {
 	uint32_t org_ldr_size, import_size, i = 0;
 	uint64_t org_auth_id = 0;
@@ -103,9 +103,8 @@ void import_ldrs(uint8_t *in, uint32_t lv0_size, char* szInPath)
 	uint8_t *ldr = NULL;
 	char szInFileName[MAX_PATH] = {0};		
 	int found = 0;
-
 	
-
+	
 	// iterate the binary, and process importing the 
 	// actual loaders from disk	
 	for(i=0; i<lv0_size; i+=4)
@@ -141,8 +140,11 @@ void import_ldrs(uint8_t *in, uint32_t lv0_size, char* szInPath)
 			}
 			else {								
 				printf("imported ldr:%s at 0x%x, new size 0x%x (prev. size 0x%x)\n", g_pszLdrNames[found], i, import_size, org_ldr_size);				
-				//memset(in+i, 0x00, org_ldr_size);	// zero out the area before the copy (original size)
-				memcpy(in+i, ldr, import_size);		// copy in the new ldr (new size)
+				// zero out the area before the copy (original size)
+//				memset(in+i, 0x00, org_ldr_size);	
+
+				// copy in the new ldr (new size)
+				memcpy(out+i, ldr, import_size);
 			}						
 			found++;
 			if(found >= NUM_EMBEDDED_LDRS)
@@ -245,10 +247,13 @@ int __cdecl main(int argc, char *argv[])
 	uint8_t *erk = NULL;
 	uint8_t *riv = NULL;
 	uint8_t *in = NULL;
+	uint8_t *out = NULL;
 	uint8_t *lv1ldr = NULL;
+	uint8_t *lv1ldr_out = NULL;
 	uint32_t lv1ldr_size = 0;
 	uint32_t end_of_data = 0;
 	uint32_t lv0_size = 0;
+	uint32_t lv0_size_verify = 0;
 	uint32_t args_mask = 0x00;
 	int i = 0;
 	int index = 0;
@@ -377,15 +382,33 @@ int __cdecl main(int argc, char *argv[])
 	if ( sprintf_s(szFullFileName, MAX_PATH, "%s\\%s", szFilePath, szFileName) <= 0)
 		goto exit;	
 
-	// read file into buffer
+	/////////////////////////////////////////////////////////////////////////////////////
+	//  in order to avoid issues with decrypting the lv1ldr to verify it, and then having
+	//  decrypted data left over, make a copy of the file into a second buffer, which we
+	//  will ONLY use for the final output file....
+	//
+	// read file into "in" buffer
 	if ( read_entire_file(szFullFileName, (void **)&in, &lv0_size, SFC_BLOCK_SIZE) < 0 ) {
 		printf("\nERROR: could not read_file:%s\n", szFileName);
+		goto exit;
+	}
+	// read file into "out" buffer
+	if ( read_entire_file(szFullFileName, (void **)&out, &lv0_size_verify, SFC_BLOCK_SIZE) < 0 ) {
+		printf("\nERROR: could not read_file:%s\n", szFileName);
+		goto exit;
+	}
+	/////////////////////////////////////////////////////////////////////////////////////////
+
+
+	// double check we read the file in correctly both times!
+	if ( lv0_size != lv0_size_verify ) {
+		printf("FAIL: unexpected error reading in the LV0 file, please exit and try again!!!\n");
 		goto exit;
 	}
 	// verify ELF header at start of file
 	if( be32(in) != ELF_HEADER_SIG ) {
 		printf("FAIL: %s is not an elf file\n", szFileName);
-		exit(1);
+		goto exit;
 	}
 
 	//find keys/data for lv1ldr crypto
@@ -401,7 +424,7 @@ int __cdecl main(int argc, char *argv[])
 	//find lv1ldr, and get its' current size
 	lv1ldr = get_lv1ldr(in, lv0_size);
 	lv1ldr_size = get_lv1ldr_size(in, lv0_size, (uint32_t)(lv1ldr - in));
-	//printf("lv1ldr_size:0x%x\n", lv1ldr_size);	
+	//printf("lv1ldr:0x%p\n", lv1ldr);	
 
 	/*print_hex(erk, 0x10);
 	print_hex(riv, 0x10);
@@ -409,8 +432,7 @@ int __cdecl main(int argc, char *argv[])
 	print_hex(B, 0x10);
 	print_hex(T2, 0x10);
 	print_hex(lv1ldr, 0x10);
-	printf("lv1ldr_size %x\n", lv1ldr_size);*/
-
+	printf("lv1ldr_size %x\n", lv1ldr_size);*/	
 
 	// first check the current lv1ldr, if it currently
 	// exists in 'encrypted' state, decrypt it, so we can
@@ -421,14 +443,13 @@ int __cdecl main(int argc, char *argv[])
 		crypt_lv1ldr(lv1ldr, lv1ldr_size, erk, riv);
 		if(be32(lv1ldr) != SELF_HEADER_SIG) {
 			printf("failed to verify header of lv1ldr\n");
-			exit(1);
+			goto exit;
 		}
 		else
 			printf("CRYPTED LV1LDR located/decrypted successfully\n");
 	}
 	else
 		printf("NON-CRYPTED LV1LDR located successfully\n");
-
 
 	// if we are doing EXPORT, 
 	// extract the loaders
@@ -440,18 +461,21 @@ int __cdecl main(int argc, char *argv[])
 	else 
 	{	
 		// import in the new ldrs		
-		import_ldrs(in, lv0_size, szFilePath);			
+		import_ldrs(in, out, lv0_size, szFilePath);			
 
 		// if we selected "lv1crypt", then encrypt the lv1ldr
 		if (bDoLV1Crypt == TRUE) {
-			crypt_lv1ldr(lv1ldr, lv1ldr_size, erk, riv);
+			// find lv1ldr, and get its' current size, 
+			// and then crypt it
+			lv1ldr_out = get_lv1ldr(out, lv0_size);			
+			crypt_lv1ldr(lv1ldr_out, lv1ldr_size, erk, riv);
 			printf("\t*** lv1ldr set to ENCRYPTED ***\n");
 		}
 		else
 			printf("\t*** lv1ldr set to NON-ENCRYPTED ***\n");
 
 		// write out the final file
-		write_file(szFullFileName, in, lv0_size);
+		write_file(szFullFileName, out, lv0_size);
 
 		// if cleanup specified, delete the 
 		// exracted loaders
@@ -470,6 +494,10 @@ exit:
 	// free the alloc'd memory
 	if (in != NULL)
 		free(in);
+
+	// free the alloc'd memory
+	if (out != NULL)
+		free(out);
 
 	return 0;
 }
