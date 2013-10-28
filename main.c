@@ -95,12 +95,13 @@ void extract_ldrs(uint8_t *in, uint32_t size, char* szFilePath)
 
 ///////////////////////////////////////////////////////////////////////////////////////
 //
-void import_ldrs(uint8_t *in, uint8_t *out, uint32_t lv0_size, char* szInPath)
+uint32_t import_ldrs(uint8_t *in, uint8_t *out, uint32_t lv0_size, char* szInPath, uint32_t* plv1ldr_outsize)
 {
 	uint32_t org_ldr_size, import_size, i = 0;
 	uint64_t org_auth_id = 0;
 	uint64_t new_auth_id = 0;
 	uint8_t *ldr = NULL;
+	uint32_t result = 1;
 	char szInFileName[MAX_PATH] = {0};		
 	int found = 0;
 	
@@ -122,35 +123,50 @@ void import_ldrs(uint8_t *in, uint8_t *out, uint32_t lv0_size, char* szInPath)
 			// read in the new ldr from the file on disk
 			if (read_entire_file(szInFileName, (void **)&ldr, &import_size, SFC_BLOCK_SIZE) < 0) {
 				printf("\nERROR: read_file failed:%s", szInFileName);
-				exit(1);
+				result = 0;
+				goto exit;
 			}			
 			// if the AUTHID of the new ldr, does NOT match
 			// the AUTHID of the original ldr, then fail out
 			new_auth_id = (uint64_t)be64(ldr+0x70);
 			if ( new_auth_id != org_auth_id ) {				
 				printf("ERROR! AUTHIDs do NOT match!\n\t--> expected:0x%16llx, found:0x%16llx, file:%s\n", org_auth_id, new_auth_id, g_pszLdrNames[found]);
-				exit(1);
+				result = 0;
+				goto exit;
 			}
 			// check our imported ldr size, versus the original size of the
 			// ldr that was in LV0.  If import_size is larger than the max size,
 			// we must fail out
 			if ( import_size > org_ldr_size ) {
 				printf("import failed: file:%s is TOO LARGE! MAX size for import: 0x%x, size attempted: 0x%x\n", g_pszLdrNames[found], org_ldr_size, import_size);
-				exit(1);
+				result = 0;
+				goto exit;
 			}
 			else {								
-				printf("imported ldr:%s at 0x%x, new size 0x%x (prev. size 0x%x)\n", g_pszLdrNames[found], i, import_size, org_ldr_size);				
+				printf("imported ldr:%s at 0x%x, new size 0x%x (prev. size 0x%x)\n", g_pszLdrNames[found], i, import_size, org_ldr_size);
+				// get the actual size of the "lv1ldr.self"
+				if ( strstr(szInFileName, g_pszLdrNames[0]) != NULL )
+					*plv1ldr_outsize = import_size;
 				// zero out the area before the copy (original size)
-//				memset(in+i, 0x00, org_ldr_size);	
-
+				// memset(in+i, 0x00, org_ldr_size);	
 				// copy in the new ldr (new size)
 				memcpy(out+i, ldr, import_size);
+				if (ldr != NULL) {
+					free(ldr);
+					ldr = NULL;
+				}
 			}						
 			found++;
 			if(found >= NUM_EMBEDDED_LDRS)
 				break;
 		} // if (SCE...)
 	} // for (i = 0...)
+exit:
+	// free the alloc'd memory
+	if (ldr != NULL)
+		free(ldr);
+
+	return result;
 }
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -253,6 +269,7 @@ int __cdecl main(int argc, char *argv[])
 	uint32_t lv1ldr_size = 0;
 	uint32_t end_of_data = 0;
 	uint32_t lv0_size = 0;
+	uint32_t lv1ldr_finalsize = 0;
 	uint32_t lv0_size_verify = 0;
 	uint32_t args_mask = 0x00;
 	int i = 0;
@@ -461,18 +478,19 @@ int __cdecl main(int argc, char *argv[])
 	else 
 	{	
 		// import in the new ldrs		
-		import_ldrs(in, out, lv0_size, szFilePath);			
+		if ( import_ldrs(in, out, lv0_size, szFilePath, &lv1ldr_finalsize) != 1)
+			goto exit;
 
 		// if we selected "lv1crypt", then encrypt the lv1ldr
 		if (bDoLV1Crypt == TRUE) {
 			// find lv1ldr, and get its' current size, 
 			// and then crypt it
 			lv1ldr_out = get_lv1ldr(out, lv0_size);			
-			crypt_lv1ldr(lv1ldr_out, lv1ldr_size, erk, riv);
-			printf("\t*** lv1ldr set to ENCRYPTED ***\n");
+			crypt_lv1ldr(lv1ldr_out, lv1ldr_finalsize, erk, riv);
+			printf("\t*** lv1ldr set to ENCRYPTED (size:0x%x) ***\n", lv1ldr_finalsize);
 		}
 		else
-			printf("\t*** lv1ldr set to NON-ENCRYPTED ***\n");
+			printf("\t*** lv1ldr set to NON-ENCRYPTED (size:0x%x) ***\n", lv1ldr_finalsize);
 
 		// write out the final file
 		write_file(szFullFileName, out, lv0_size);
