@@ -266,10 +266,12 @@ int __cdecl main(int argc, char *argv[])
 	uint8_t *out = NULL;
 	uint8_t *lv1ldr = NULL;
 	uint8_t *lv1ldr_out = NULL;
+	uint8_t *pTempLdr = NULL;
 	uint32_t lv1ldr_size = 0;
 	uint32_t end_of_data = 0;
 	uint32_t lv0_size = 0;
-	uint32_t lv1ldr_finalsize = 0;
+	uint32_t lv1ldr_actualsize = 0;
+	uint32_t lv1ldr_cryptsize = 0;
 	uint32_t lv0_size_verify = 0;
 	uint32_t args_mask = 0x00;
 	int i = 0;
@@ -478,19 +480,27 @@ int __cdecl main(int argc, char *argv[])
 	else 
 	{	
 		// import in the new ldrs		
-		if ( import_ldrs(in, out, lv0_size, szFilePath, &lv1ldr_finalsize) != 1)
+		if ( import_ldrs(in, out, lv0_size, szFilePath, &lv1ldr_actualsize) != 1)
 			goto exit;
 
 		// if we selected "lv1crypt", then encrypt the lv1ldr
 		if (bDoLV1Crypt == TRUE) {
 			// find lv1ldr, and get its' current size, 
-			// and then crypt it
-			lv1ldr_out = get_lv1ldr(out, lv0_size);			
-			crypt_lv1ldr(lv1ldr_out, lv1ldr_finalsize, erk, riv);
-			printf("\t*** lv1ldr set to ENCRYPTED (size:0x%x) ***\n", lv1ldr_finalsize);
+			// and alloc a buffer for the temp crypt
+			lv1ldr_out = get_lv1ldr(out, lv0_size);	
+			lv1ldr_cryptsize = round_up(lv1ldr_actualsize, SFC_BLOCK_SIZE);
+			pTempLdr = (uint8_t*)calloc(lv1ldr_cryptsize, sizeof(char));
+
+			// copy the lv1ldr to a temp buffer, and crypt it, then 			
+			memcpy_s(pTempLdr, lv1ldr_cryptsize, lv1ldr_out, lv1ldr_actualsize);
+			crypt_lv1ldr(pTempLdr, lv1ldr_cryptsize, erk, riv);
+
+			// copy back into the output file
+			memcpy_s(lv1ldr_out, lv1ldr_actualsize, pTempLdr, lv1ldr_actualsize);			
+			printf("\t*** lv1ldr set to ENCRYPTED (size:0x%x) ***\n", lv1ldr_actualsize);
 		}
 		else
-			printf("\t*** lv1ldr set to NON-ENCRYPTED (size:0x%x) ***\n", lv1ldr_finalsize);
+			printf("\t*** lv1ldr set to NON-ENCRYPTED (size:0x%x) ***\n", lv1ldr_actualsize);
 
 		// write out the final file
 		write_file(szFullFileName, out, lv0_size);
@@ -516,6 +526,10 @@ exit:
 	// free the alloc'd memory
 	if (out != NULL)
 		free(out);
+
+	// free the alloc'd memory
+	if (pTempLdr != NULL)
+		free(pTempLdr);
 
 	return 0;
 }
